@@ -1,3 +1,4 @@
+import java.util.Arrays;
 import java.util.Vector;
 
 public class StudentNetworkSimulator extends NetworkSimulator
@@ -272,19 +273,19 @@ public class StudentNetworkSimulator extends NetworkSimulator
         }
     }
 
-    //helper function to handle retransmitting oldest outstanding packet, which happens at several points in A
-    protected void aRetransmitOutstandingPacket() {
-        Packet p = outstandingPackets.getFirst();
-        System.out.println("RETRANSMITTING NUMBER " + p.getSeqnum());
-        //restart timer and retransmit
-        stopTimer(A);
-        toLayer3(A, p);
-        startTimer(A, RxmtInterval);
-        //Cancel RTT measurement for the retransmitted packet if it is being measured
-        if(p.getSeqnum() == seqForRTT){
-            seqForRTT = -1;
+    //helper function to retransmit all outstanding packets, something which happens several times
+    protected void aRetransmitAllOutstandingPacket() {
+        if(!outstandingPackets.isEmpty()){stopTimer(A);}
+        for(Packet p : outstandingPackets) {
+            System.out.println("RETRANSMITTING NUMBER " + p.getSeqnum());
+            toLayer3(A, p);
+            //Cancel RTT measurement for the retransmitted packet if it is being measured
+            if(p.getSeqnum() == seqForRTT){
+                seqForRTT = -1;
+            }
+            numRetransmissions_A++;
         }
-        numRetransmissions_A++;
+        if(!outstandingPackets.isEmpty()){startTimer(A, RxmtInterval);}
     }
 
     // This routine will be called whenever a packet sent from the B-side 
@@ -314,13 +315,42 @@ public class StudentNetworkSimulator extends NetworkSimulator
             }
         }
         //if the corresponding outstanding packet is not found, the ack must be a duplicate.
-        //As per instructions, on duplicate ack reception, retransmit the oldest outstanding packet
+        //As per instructions, on duplicate ack reception, retransmit all outstanding packets.
+        //Since duplicates contain sacks as well, handle those acks too.
         if(duplicate && !outstandingPackets.isEmpty()){ //of course, nothing can be retransmitted if nothing is outstanding
             System.out.println("A GOT DUP ACK " + packet.getAcknum() + " AT TIME " + getTime());
-            aRetransmitOutstandingPacket();
+            System.out.println("DUP ACK sack FIELD INCLUDES: " + Arrays.toString(packet.getSack()));
+            System.out.println();
+            Vector<Packet> packetsToRemove = new Vector<>();
+            for(Packet p : outstandingPackets){
+                //for each outstanding packet, check if it is selectively acked.
+                for(int i=0; i<packet.getSackCount(); i++){
+                    int snum = packet.getSack()[i];
+                    if(p.getSeqnum() == snum) {
+                        packetsToRemove.add(p);
+                        //Since the packet is being acked, we should make sure to cancel the time measurements
+                        // if necessary
+                        if(p.getSeqnum() == seqForRTT){
+                            numRTTs++;
+                            RTTSum += getTime() - RTTStartTime;
+                            seqForRTT = -1;
+                        }
+                        if(p.getSeqnum() == seqForComms){
+                            numComms++;
+                            commsSum += getTime() - commsStartTime;
+                            seqForComms = -1;
+                        }
+                        break;
+                    }
+                }
+            }
+            for(Packet p : packetsToRemove){outstandingPackets.remove(p);}
+            aRetransmitAllOutstandingPacket();
         }
         //Else, adjust send buffer as needed and, if possible, send new packet
         else if(!duplicate) {
+            System.out.println("A GOT VALID ACK " + packet.getAcknum() + " AT TIME " + getTime());
+            System.out.println("VALID ACK sack FIELD INCLUDES: " + Arrays.toString(packet.getSack()));
             //in this version of GBN, stop the timer whenever a new valid ack arrives.
             stopTimer(A);
 
@@ -338,13 +368,29 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
             //remove the acked packet
             outstandingPackets.remove(acked);
-            //Since this protocol is cumack, also remove outstanding packets that implicitly have been
-            // acked
+            //Since this protocol is cumack and sack, also remove outstanding packets that implicitly
+            // have been acked and any packets that have been sacked.
             Vector<Packet> packetsToRemove = new Vector<>();
             for(Packet p : outstandingPackets){
-                //for each outstanding packet, check if it is between the current send window
-                // head and the newest cumack inclusive
-                if(isBetween(p.getSeqnum(), sendWindowHead, packet.getAcknum())) {
+                //for each outstanding packet check 2 things:
+                // - check if it is cumulatively acked
+                // - check if it is selectively acked
+                //If either is true, acknowledge it on sender side.
+                boolean hasBeenAcked;
+
+                //For cumack, check if it is between the current send window
+                // head and the newest cumack inclusive.
+                hasBeenAcked = (isBetween(p.getSeqnum(), sendWindowHead, packet.getAcknum()));
+                //For sack, check if its number is in the ack message's sack list
+                for(int i=0; i<packet.getSackCount(); i++){
+                    int snum = packet.getSack()[i];
+                    if(p.getSeqnum() == snum) {
+                        hasBeenAcked = true;
+                        break;
+                    }
+                }
+
+                if(hasBeenAcked){
                     packetsToRemove.add(p);
                     //Since the packet is being acked, we should make sure to cancel the time measurements
                     // if necessary
@@ -407,13 +453,21 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // for how the timer is started and stopped. 
     protected void aTimerInterrupt()
     {
-        //Find the oldest outstanding packet and retransmit it, then start the timer again.
-        //this vector is LIFO, with newer packets being added to the end. The first packet in
-        // the vector can therefore be considered the oldest.
+        //Retransmit all oustanding packets in LIFO order. Since the timer will be restarted
+        // on every send, simply stop the timer before sending all packets and start it again
+        // after sending the last.
         System.out.println("TIMEOUT AT TIME " + getTime());
-        if(!outstandingPackets.isEmpty()) {
-            aRetransmitOutstandingPacket();
+        if(!outstandingPackets.isEmpty()){stopTimer(A);}
+        for(Packet p : outstandingPackets) {
+            System.out.println("RETRANSMITTING NUMBER " + p.getSeqnum());
+            toLayer3(A, p);
+            //Cancel RTT measurement for the retransmitted packet if it is being measured
+            if(p.getSeqnum() == seqForRTT){
+                seqForRTT = -1;
+            }
+            numRetransmissions_A++;
         }
+        if(!outstandingPackets.isEmpty()){startTimer(A, RxmtInterval);}
     }
     
     // This routine will be called once, before any of your other A-side 
@@ -446,6 +500,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     protected void bRetransmitCumack() {
         Packet newAck = new Packet(-1, lastAcked, 0, "");
         addChecksum(newAck);
+        newAck.setSack(inputBuffer);
         toLayer3(B, newAck);
         numAcksSent_B++;
     }
@@ -475,14 +530,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
         //check for a duplicate by checking if this packet is in the current
         // input buffer. If it already is there, ignore it but send a cumack again.
-//        if(isBetween(packet.getSeqnum(), recvWindowHead, lastAcked)) {
-//            Packet newAck = new Packet(-1, lastAcked, 0, "");
-//            addChecksum(newAck);
-//            toLayer3(B, newAck);
-//            numAcksSent_B++;
-//            //System.out.println("B found duplicate");
-//            return;
-//        }
         for(Packet p : inputBuffer){
             if(p.getSeqnum() == packet.getSeqnum()) {
                 bRetransmitCumack();
@@ -523,6 +570,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
             for(Packet p : packetsToRemove) {inputBuffer.remove(p);}
             Packet newAck = new Packet(-1, currNum, 0, "");
             addChecksum(newAck);
+            newAck.setSack(inputBuffer);
             toLayer3(B, newAck);
             numAcksSent_B++;
             lastAcked = currNum;
@@ -537,6 +585,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
         inputBuffer.add(packet);
         Packet anotherAck = new Packet(-1, lastAcked, 0, "");
         addChecksum(anotherAck);
+        anotherAck.setSack(inputBuffer);
         toLayer3(B, anotherAck);
         numAcksSent_B++;
     }

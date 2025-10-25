@@ -1,4 +1,5 @@
 import java.util.List;
+import java.util.Vector;
 
 public class Packet
 {
@@ -91,19 +92,20 @@ public class Packet
     }
 
     //new set method for sack array.
-    //Pulls from a given list in FIFO order.
+    //Reads from a given vector in FIFO order.
     //Added argument to pick whether to append to sack list or overwrite it.
-    public void setSack(List<Integer> nums, boolean overwrite) {
+    public void setSack(Vector<Packet> pkts, boolean overwrite) {
         if(overwrite) {
             sack = new int[5];
             sackCount = 0;
         }
-        setSack(nums);
+        setSack(pkts);
     }
     //I can also call this directly for default no-overwrite
-    public void setSack(List<Integer> nums) {
-        while(sackCount < 5 && !nums.isEmpty()) {
-            sack[sackCount] = nums.removeFirst();
+    public void setSack(Vector<Packet> pkts) {
+        while(sackCount < 5 && !pkts.isEmpty()) {
+            int n = pkts.getFirst().getSeqnum();
+            sack[sackCount] = n;
             sackCount++;
         }
     }
