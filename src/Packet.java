@@ -103,8 +103,8 @@ public class Packet
     }
     //I can also call this directly for default no-overwrite
     public void setSack(Vector<Packet> pkts) {
-        while(sackCount < 5 && !pkts.isEmpty()) {
-            int n = pkts.getFirst().getSeqnum();
+        while(sackCount < 5 && sackCount < pkts.size()) {
+            int n = pkts.get(sackCount).getSeqnum();
             sack[sackCount] = n;
             sackCount++;
         }

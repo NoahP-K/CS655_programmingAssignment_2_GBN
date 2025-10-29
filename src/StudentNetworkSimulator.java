@@ -633,7 +633,8 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
     //returns time stats to be used in data compilation
     public double[] getTimeStats() {
-        return new double[] {RTTSum/numRTTs, commsSum/numComms};
+        //return: average RTT, average comm, total retransmissions
+        return new double[] {RTTSum/numRTTs, commsSum/numComms, numRetransmissions_A};
     }
 
 }
